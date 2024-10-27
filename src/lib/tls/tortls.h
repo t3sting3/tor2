@@ -1,6 +1,6 @@
 /* Copyright (c) 2003, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2019, The Tor Project, Inc. */
+ * Copyright (c) 2007-2020, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 #ifndef TOR_TORTLS_H
@@ -25,12 +25,12 @@ struct ssl_ctx_st;
 struct ssl_session_st;
 typedef struct ssl_ctx_st tor_tls_context_impl_t;
 typedef struct ssl_st tor_tls_impl_t;
-#else
+#else /* !defined(ENABLE_OPENSSL) */
 struct PRFileDesc;
 typedef struct PRFileDesc tor_tls_context_impl_t;
 typedef struct PRFileDesc tor_tls_impl_t;
-#endif
-#endif
+#endif /* defined(ENABLE_OPENSSL) */
+#endif /* defined(TORTLS_PRIVATE) */
 
 struct tor_x509_cert_t;
 
@@ -107,6 +107,7 @@ int tor_tls_handshake(tor_tls_t *tls);
 int tor_tls_finish_handshake(tor_tls_t *tls);
 void tor_tls_unblock_renegotiation(tor_tls_t *tls);
 void tor_tls_block_renegotiation(tor_tls_t *tls);
+void tor_tls_assert_renegotiation_unblocked(tor_tls_t *tls);
 int tor_tls_get_pending_bytes(tor_tls_t *tls);
 size_t tor_tls_get_forced_write_size(tor_tls_t *tls);
 
@@ -143,9 +144,9 @@ void check_no_tls_errors_(const char *fname, int line);
 
 void tor_tls_log_one_error(tor_tls_t *tls, unsigned long err,
                            int severity, int domain, const char *doing);
-#else
+#else /* !defined(ENABLE_OPENSSL) */
 #define check_no_tls_errors() STMT_NIL
-#endif
+#endif /* defined(ENABLE_OPENSSL) */
 
 int tor_tls_get_my_certs(int server,
                          const struct tor_x509_cert_t **link_cert_out,

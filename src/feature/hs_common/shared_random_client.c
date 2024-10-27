@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2019, The Tor Project, Inc. */
+/* Copyright (c) 2018-2020, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -8,18 +8,16 @@
  *        as part of the dirauth module.
  **/
 
-#define SHARED_RANDOM_CLIENT_PRIVATE
 #include "feature/hs_common/shared_random_client.h"
 
 #include "app/config/config.h"
 #include "feature/dircommon/voting_schedule.h"
-#include "feature/nodelist/microdesc.h"
 #include "feature/nodelist/networkstatus.h"
 #include "lib/encoding/binascii.h"
 
 #include "feature/nodelist/networkstatus_st.h"
 
-/* Convert a given srv object to a string for the control port. This doesn't
+/** Convert a given srv object to a string for the control port. This doesn't
  * fail and the srv object MUST be valid. */
 static char *
 srv_to_control_string(const sr_srv_t *srv)
@@ -33,14 +31,12 @@ srv_to_control_string(const sr_srv_t *srv)
   return srv_str;
 }
 
-/* Return the voting interval of the tor vote subsystem. */
+/** Return the voting interval of the tor vote subsystem. */
 int
 get_voting_interval(void)
 {
   int interval;
-  networkstatus_t *consensus =
-    networkstatus_get_reasonably_live_consensus(time(NULL),
-                                                usable_consensus_flavor());
+  networkstatus_t *consensus = networkstatus_get_live_consensus(time(NULL));
 
   if (consensus) {
     interval = (int)(consensus->fresh_until - consensus->valid_after);
@@ -54,7 +50,7 @@ get_voting_interval(void)
   return interval;
 }
 
-/* Given the current consensus, return the start time of the current round of
+/** Given the current consensus, return the start time of the current round of
  * the SR protocol. For example, if it's 23:47:08, the current round thus
  * started at 23:47:00 for a voting interval of 10 seconds.
  *
@@ -81,7 +77,7 @@ get_start_time_of_current_round(void)
  * Public API
  */
 
-/* Encode the given shared random value and put it in dst. Destination
+/** Encode the given shared random value and put it in dst. Destination
  * buffer must be at least SR_SRV_VALUE_BASE64_LEN plus the NULL byte. */
 void
 sr_srv_encode(char *dst, size_t dst_len, const sr_srv_t *srv)
@@ -102,7 +98,7 @@ sr_srv_encode(char *dst, size_t dst_len, const sr_srv_t *srv)
   strlcpy(dst, buf, dst_len);
 }
 
-/* Return the current SRV string representation for the control port. Return a
+/** Return the current SRV string representation for the control port. Return a
  * newly allocated string on success containing the value else "" if not found
  * or if we don't have a valid consensus yet. */
 char *
@@ -118,7 +114,7 @@ sr_get_current_for_control(void)
   return srv_str;
 }
 
-/* Return the previous SRV string representation for the control port. Return
+/** Return the previous SRV string representation for the control port. Return
  * a newly allocated string on success containing the value else "" if not
  * found or if we don't have a valid consensus yet. */
 char *
@@ -134,7 +130,7 @@ sr_get_previous_for_control(void)
   return srv_str;
 }
 
-/* Return current shared random value from the latest consensus. Caller can
+/** Return current shared random value from the latest consensus. Caller can
  * NOT keep a reference to the returned pointer. Return NULL if none. */
 const sr_srv_t *
 sr_get_current(const networkstatus_t *ns)
@@ -145,8 +141,7 @@ sr_get_current(const networkstatus_t *ns)
   if (ns) {
     consensus = ns;
   } else {
-    consensus = networkstatus_get_reasonably_live_consensus(approx_time(),
-                                                  usable_consensus_flavor());
+    consensus = networkstatus_get_live_consensus(approx_time());
   }
   /* Ideally we would never be asked for an SRV without a live consensus. Make
    * sure this assumption is correct. */
@@ -158,7 +153,7 @@ sr_get_current(const networkstatus_t *ns)
   return NULL;
 }
 
-/* Return previous shared random value from the latest consensus. Caller can
+/** Return previous shared random value from the latest consensus. Caller can
  * NOT keep a reference to the returned pointer. Return NULL if none. */
 const sr_srv_t *
 sr_get_previous(const networkstatus_t *ns)
@@ -169,8 +164,7 @@ sr_get_previous(const networkstatus_t *ns)
   if (ns) {
     consensus = ns;
   } else {
-    consensus = networkstatus_get_reasonably_live_consensus(approx_time(),
-                                                  usable_consensus_flavor());
+    consensus = networkstatus_get_live_consensus(approx_time());
   }
   /* Ideally we would never be asked for an SRV without a live consensus. Make
    * sure this assumption is correct. */
@@ -182,7 +176,7 @@ sr_get_previous(const networkstatus_t *ns)
   return NULL;
 }
 
-/* Parse a list of arguments from a SRV value either from a vote, consensus
+/** Parse a list of arguments from a SRV value either from a vote, consensus
  * or from our disk state and return a newly allocated srv object. NULL is
  * returned on error.
  *
@@ -242,14 +236,10 @@ sr_state_get_start_time_of_current_protocol_run(void)
   int voting_interval = get_voting_interval();
   time_t beginning_of_curr_round;
 
-  /* This function is not used for voting purposes, so if we have a reasonably
-   * live consensus, use its valid-after as the beginning of the current
-   * round. If we have no consensus but we're an authority, use our own
-   * schedule. Otherwise, try using our view of the voting interval to figure
-   * out when the current round _should_ be starting. */
-  networkstatus_t *ns =
-    networkstatus_get_reasonably_live_consensus(approx_time(),
-                                                usable_consensus_flavor());
+  /* This function is not used for voting purposes, so if we have a live
+     consensus, use its valid-after as the beginning of the current round,
+     otherwise resort to the voting schedule which should always exist. */
+  networkstatus_t *ns = networkstatus_get_live_consensus(approx_time());
   if (ns) {
     beginning_of_curr_round = ns->valid_after;
   } else {
@@ -263,6 +253,10 @@ sr_state_get_start_time_of_current_protocol_run(void)
   /* Get start time by subtracting the time elapsed from the beginning of the
      protocol run */
   time_t time_elapsed_since_start_of_run = curr_round_slot * voting_interval;
+
+  log_debug(LD_GENERAL, "Current SRV proto run: Start of current round: %u. "
+            "Time elapsed: %u (%d)", (unsigned) beginning_of_curr_round,
+            (unsigned) time_elapsed_since_start_of_run, voting_interval);
 
   return beginning_of_curr_round - time_elapsed_since_start_of_run;
 }
@@ -295,4 +289,3 @@ sr_state_get_protocol_run_duration(void)
   int total_protocol_rounds = SHARED_RANDOM_N_ROUNDS * SHARED_RANDOM_N_PHASES;
   return total_protocol_rounds * get_voting_interval();
 }
-

@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2019, The Tor Project, Inc. */
+/* Copyright (c) 2017-2020, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -6,6 +6,7 @@
  * \brief Test hidden service common functionalities.
  */
 
+#define CONNECTION_EDGE_PRIVATE
 #define HS_COMMON_PRIVATE
 #define HS_CLIENT_PRIVATE
 #define HS_SERVICE_PRIVATE
@@ -275,7 +276,7 @@ test_start_time_of_next_time_period(void *arg)
 static void
 cleanup_nodelist(void)
 {
-  smartlist_t *nodelist = nodelist_get_list();
+  const smartlist_t *nodelist = nodelist_get_list();
   SMARTLIST_FOREACH_BEGIN(nodelist, node_t *, node) {
     tor_free(node->md);
     node->md = NULL;
@@ -359,10 +360,9 @@ mock_networkstatus_get_latest_consensus(void)
 }
 
 static networkstatus_t *
-mock_networkstatus_get_reasonably_live_consensus(time_t now, int flavor)
+mock_networkstatus_get_live_consensus(time_t now)
 {
   (void) now;
-  (void) flavor;
 
   tt_assert(mock_ns);
 
@@ -382,8 +382,6 @@ test_responsible_hsdirs(void *arg)
 
   MOCK(networkstatus_get_latest_consensus,
        mock_networkstatus_get_latest_consensus);
-  MOCK(networkstatus_get_reasonably_live_consensus,
-       mock_networkstatus_get_reasonably_live_consensus);
 
   ns = networkstatus_get_latest_consensus();
 
@@ -420,8 +418,6 @@ test_responsible_hsdirs(void *arg)
   smartlist_clear(ns->routerstatus_list);
   networkstatus_vote_free(mock_ns);
   cleanup_nodelist();
-
-  UNMOCK(networkstatus_get_reasonably_live_consensus);
 }
 
 static void
@@ -471,8 +467,6 @@ test_desc_reupload_logic(void *arg)
 
   hs_init();
 
-  MOCK(networkstatus_get_reasonably_live_consensus,
-       mock_networkstatus_get_reasonably_live_consensus);
   MOCK(router_have_minimum_dir_info,
        mock_router_have_minimum_dir_info);
   MOCK(get_or_state,
@@ -509,6 +503,7 @@ test_desc_reupload_logic(void *arg)
                 pubkey_hex, strlen(pubkey_hex));
   hs_build_address(&pubkey, HS_VERSION_THREE, onion_addr);
   service = tor_malloc_zero(sizeof(hs_service_t));
+  tt_assert(service);
   memcpy(service->onion_address, onion_addr, sizeof(service->onion_address));
   ed25519_secret_key_generate(&service->keys.identity_sk, 0);
   ed25519_public_key_generate(&service->keys.identity_pk,
@@ -610,6 +605,10 @@ test_desc_reupload_logic(void *arg)
   SMARTLIST_FOREACH(ns->routerstatus_list,
                     routerstatus_t *, rs, routerstatus_free(rs));
   smartlist_clear(ns->routerstatus_list);
+  if (service) {
+    remove_service(get_hs_service_map(), service);
+    hs_service_free(service);
+  }
   networkstatus_vote_free(ns);
   cleanup_nodelist();
   hs_free_all();
@@ -637,7 +636,7 @@ test_disaster_srv(void *arg)
   get_disaster_srv(1, srv_one);
   get_disaster_srv(2, srv_two);
 
-  /* Check that the cached ones where updated */
+  /* Check that the cached ones were updated */
   tt_mem_op(cached_disaster_srv_one, OP_EQ, srv_one, DIGEST256_LEN);
   tt_mem_op(cached_disaster_srv_two, OP_EQ, srv_two, DIGEST256_LEN);
 
@@ -780,6 +779,7 @@ static void
 test_parse_extended_hostname(void *arg)
 {
   (void) arg;
+  hostname_type_t type;
 
   char address1[] = "fooaddress.onion";
   char address2[] = "aaaaaaaaaaaaaaaa.onion";
@@ -790,20 +790,41 @@ test_parse_extended_hostname(void *arg)
   char address7[] = ".abcdefghijklmnop.onion";
   char address8[] =
     "www.25njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkenl5sid.onion";
+  char address9[] =
+    "www.15njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkenl5sid.onion";
 
-  tt_assert(BAD_HOSTNAME == parse_extended_hostname(address1));
-  tt_assert(ONION_V2_HOSTNAME == parse_extended_hostname(address2));
-  tt_str_op(address2,OP_EQ, "aaaaaaaaaaaaaaaa");
-  tt_assert(EXIT_HOSTNAME == parse_extended_hostname(address3));
-  tt_assert(NORMAL_HOSTNAME == parse_extended_hostname(address4));
-  tt_assert(ONION_V2_HOSTNAME == parse_extended_hostname(address5));
-  tt_str_op(address5,OP_EQ, "abcdefghijklmnop");
-  tt_assert(ONION_V2_HOSTNAME == parse_extended_hostname(address6));
-  tt_str_op(address6,OP_EQ, "abcdefghijklmnop");
-  tt_assert(BAD_HOSTNAME == parse_extended_hostname(address7));
-  tt_assert(ONION_V3_HOSTNAME == parse_extended_hostname(address8));
+  tt_assert(!parse_extended_hostname(address1, &type));
+  tt_int_op(type, OP_EQ, BAD_HOSTNAME);
+
+  tt_assert(parse_extended_hostname(address2, &type));
+  tt_int_op(type, OP_EQ, ONION_V2_HOSTNAME);
+  tt_str_op(address2, OP_EQ, "aaaaaaaaaaaaaaaa");
+
+  tt_assert(parse_extended_hostname(address3, &type));
+  tt_int_op(type, OP_EQ, EXIT_HOSTNAME);
+
+  tt_assert(parse_extended_hostname(address4, &type));
+  tt_int_op(type, OP_EQ, NORMAL_HOSTNAME);
+
+  tt_assert(parse_extended_hostname(address5, &type));
+  tt_int_op(type, OP_EQ, ONION_V2_HOSTNAME);
+  tt_str_op(address5, OP_EQ, "abcdefghijklmnop");
+
+  tt_assert(parse_extended_hostname(address6, &type));
+  tt_int_op(type, OP_EQ, ONION_V2_HOSTNAME);
+  tt_str_op(address6, OP_EQ, "abcdefghijklmnop");
+
+  tt_assert(!parse_extended_hostname(address7, &type));
+  tt_int_op(type, OP_EQ, BAD_HOSTNAME);
+
+  tt_assert(parse_extended_hostname(address8, &type));
+  tt_int_op(type, OP_EQ, ONION_V3_HOSTNAME);
   tt_str_op(address8, OP_EQ,
             "25njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkenl5sid");
+
+  /* Invalid v3 address. */
+  tt_assert(!parse_extended_hostname(address9, &type));
+  tt_int_op(type, OP_EQ, ONION_V3_HOSTNAME);
 
  done: ;
 }
@@ -884,11 +905,9 @@ static smartlist_t *service_responsible_hsdirs = NULL;
 static smartlist_t *client_responsible_hsdirs = NULL;
 
 static networkstatus_t *
-mock_networkstatus_get_reasonably_live_consensus_service(time_t now,
-                                                         int flavor)
+mock_networkstatus_get_live_consensus_service(time_t now)
 {
   (void) now;
-  (void) flavor;
 
   if (mock_service_ns) {
     return mock_service_ns;
@@ -904,14 +923,13 @@ mock_networkstatus_get_reasonably_live_consensus_service(time_t now,
 static networkstatus_t *
 mock_networkstatus_get_latest_consensus_service(void)
 {
-  return mock_networkstatus_get_reasonably_live_consensus_service(0, 0);
+  return mock_networkstatus_get_live_consensus_service(0);
 }
 
 static networkstatus_t *
-mock_networkstatus_get_reasonably_live_consensus_client(time_t now, int flavor)
+mock_networkstatus_get_live_consensus_client(time_t now)
 {
   (void) now;
-  (void) flavor;
 
   if (mock_client_ns) {
     return mock_client_ns;
@@ -927,7 +945,7 @@ mock_networkstatus_get_reasonably_live_consensus_client(time_t now, int flavor)
 static networkstatus_t *
 mock_networkstatus_get_latest_consensus_client(void)
 {
-  return mock_networkstatus_get_reasonably_live_consensus_client(0, 0);
+  return mock_networkstatus_get_live_consensus_client(0);
 }
 
 /* Mock function because we are not trying to test the close circuit that does
@@ -1387,8 +1405,8 @@ run_reachability_scenario(const reachability_cfg_t *cfg, int num_scenario)
    * === Client setup ===
    */
 
-  MOCK(networkstatus_get_reasonably_live_consensus,
-       mock_networkstatus_get_reasonably_live_consensus_client);
+  MOCK(networkstatus_get_live_consensus,
+       mock_networkstatus_get_live_consensus_client);
   MOCK(networkstatus_get_latest_consensus,
        mock_networkstatus_get_latest_consensus_client);
 
@@ -1412,14 +1430,14 @@ run_reachability_scenario(const reachability_cfg_t *cfg, int num_scenario)
   tt_int_op(smartlist_len(client_responsible_hsdirs), OP_EQ, 6);
 
   UNMOCK(networkstatus_get_latest_consensus);
-  UNMOCK(networkstatus_get_reasonably_live_consensus);
+  UNMOCK(networkstatus_get_live_consensus);
 
   /*
    * === Service setup ===
    */
 
-  MOCK(networkstatus_get_reasonably_live_consensus,
-       mock_networkstatus_get_reasonably_live_consensus_service);
+  MOCK(networkstatus_get_live_consensus,
+       mock_networkstatus_get_live_consensus_service);
   MOCK(networkstatus_get_latest_consensus,
        mock_networkstatus_get_latest_consensus_service);
 
@@ -1446,7 +1464,7 @@ run_reachability_scenario(const reachability_cfg_t *cfg, int num_scenario)
   tt_int_op(smartlist_len(service_responsible_hsdirs), OP_EQ, 8);
 
   UNMOCK(networkstatus_get_latest_consensus);
-  UNMOCK(networkstatus_get_reasonably_live_consensus);
+  UNMOCK(networkstatus_get_live_consensus);
 
   /* Some testing of the values we just got from the client and service. */
   tt_mem_op(&client_blinded_pk, OP_EQ, &service_blinded_pk,
@@ -1697,8 +1715,8 @@ test_client_service_hsdir_set_sync(void *arg)
 
   MOCK(networkstatus_get_latest_consensus,
        mock_networkstatus_get_latest_consensus);
-  MOCK(networkstatus_get_reasonably_live_consensus,
-       mock_networkstatus_get_reasonably_live_consensus);
+  MOCK(networkstatus_get_live_consensus,
+       mock_networkstatus_get_live_consensus);
   MOCK(get_or_state,
        get_or_state_replacement);
   MOCK(hs_desc_encode_descriptor,

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2019, The Tor Project, Inc. */
+/* Copyright (c) 2012-2020, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -20,7 +20,7 @@
 #include "core/or/or.h"
 #include "core/mainloop/connection.h"
 #include "core/or/connection_or.h"
-#include "feature/control/control.h"
+#include "feature/control/control_events.h"
 #include "app/config/config.h"
 #include "lib/crypt_ops/crypto_rand.h"
 #include "lib/crypt_ops/crypto_util.h"
@@ -90,7 +90,7 @@ connection_ext_or_transition(or_connection_t *conn)
 
   conn->base_.type = CONN_TYPE_OR;
   TO_CONN(conn)->state = 0; // set the state to a neutral value
-  control_event_or_conn_status(conn, OR_CONN_EVENT_NEW, 0);
+  connection_or_event_status(conn, OR_CONN_EVENT_NEW, 0);
   connection_tls_start_handshake(conn, 1);
 }
 
@@ -493,10 +493,6 @@ connection_ext_or_handle_cmd_useraddr(connection_t *conn,
     tor_free(conn->address);
   }
   conn->address = tor_addr_to_str_dup(&addr);
-
-  /* Now that we know the address, we don't have to manually override rate
-   * limiting. */
-  conn->always_rate_limit_as_remote = 0;
 
   return 0;
 }

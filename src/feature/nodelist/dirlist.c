@@ -1,7 +1,7 @@
 /* Copyright (c) 2001 Matej Pfajfar.
  * Copyright (c) 2001-2004, Roger Dingledine.
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2019, The Tor Project, Inc. */
+ * Copyright (c) 2007-2020, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -28,7 +28,7 @@
 
 #include "app/config/config.h"
 #include "core/or/policies.h"
-#include "feature/control/control.h"
+#include "feature/control/control_events.h"
 #include "feature/dirauth/authmode.h"
 #include "feature/dircommon/directory.h"
 #include "feature/nodelist/dirlist.h"
@@ -54,23 +54,18 @@ static smartlist_t *fallback_dir_servers = NULL;
 static void
 add_trusted_dir_to_nodelist_addr_set(const dir_server_t *dir)
 {
-  tor_addr_t tmp_addr;
-
   tor_assert(dir);
   tor_assert(dir->is_authority);
 
-  /* Add IPv4 and then IPv6 if applicable. For authorities, we add the ORPort
-   * and DirPort so re-entry into the network back to them is not possible. */
-  tor_addr_from_ipv4h(&tmp_addr, dir->addr);
-  nodelist_add_addr_to_address_set(&tmp_addr, dir->or_port, dir->dir_port);
+  /* Add IPv4 and then IPv6 if applicable. */
+  nodelist_add_addr4_to_address_set(dir->addr);
   if (!tor_addr_is_null(&dir->ipv6_addr)) {
-    /* IPv6 DirPort is not a thing yet for authorities. */
-    nodelist_add_addr_to_address_set(&dir->ipv6_addr, dir->ipv6_orport, 0);
+    nodelist_add_addr6_to_address_set(&dir->ipv6_addr);
   }
 }
 
 /** Go over the trusted directory server list and add their address(es) to the
- * nodelist address set. This is called every time a new consensus is set. */
+ * nodelist address set. This is called everytime a new consensus is set. */
 MOCK_IMPL(void,
 dirlist_add_trusted_dir_addresses, (void))
 {

@@ -1,6 +1,6 @@
 /* Copyright (c) 2003-2004, Roger Dingledine
  * Copyright (c) 2004-2006, Roger Dingledine, Nick Mathewson.
- * Copyright (c) 2007-2019, The Tor Project, Inc. */
+ * Copyright (c) 2007-2020, The Tor Project, Inc. */
 /* See LICENSE for licensing information */
 
 /**
@@ -607,9 +607,6 @@ read_file_to_str_until_eof(int fd, size_t max_bytes_to_read, size_t *sz_out)
  * If <b>flags</b> &amp; RFTS_BIN, open the file in binary mode.
  * If <b>flags</b> &amp; RFTS_IGNORE_MISSING, don't warn if the file
  * doesn't exist.
- *
- * Unless the RFTS_BIN flag is set in <b>flags</b>, this function will strip
- * any CR characters in the return value on all platforms.
  */
 /*
  * This function <em>may</em> return an erroneous result if the file
@@ -688,6 +685,7 @@ read_file_to_str, (const char *filename, int flags, struct stat *stat_out))
   }
   string[r] = '\0'; /* NUL-terminate the result. */
 
+#if defined(_WIN32) || defined(__CYGWIN__)
   if (!bin && strchr(string, '\r')) {
     log_debug(LD_FS, "We didn't convert CRLF to LF as well as we hoped "
               "when reading %s. Coping.",
@@ -697,7 +695,8 @@ read_file_to_str, (const char *filename, int flags, struct stat *stat_out))
   }
   if (!bin) {
     statbuf.st_size = (size_t) r;
-  } else {
+  } else
+#endif /* defined(_WIN32) || defined(__CYGWIN__) */
     if (r != statbuf.st_size) {
       /* Unless we're using text mode on win32, we'd better have an exact
        * match for size. */
@@ -709,7 +708,6 @@ read_file_to_str, (const char *filename, int flags, struct stat *stat_out))
       errno = save_errno;
       return NULL;
     }
-  }
   close(fd);
   if (stat_out) {
     memcpy(stat_out, &statbuf, sizeof(struct stat));

@@ -29,6 +29,8 @@ env:
     - HARDENING_OPTIONS="--enable-expensive-hardening"
     ## We turn off asciidoc by default, because it's slow
     - ASCIIDOC_OPTIONS="--disable-asciidoc"
+    ## Our default rust version is the minimum supported version
+    - RUST_VERSION="1.31.0"
     ## Turn off tor's sandbox in chutney, until we fix sandbox errors that are
     ## triggered by Ubuntu Xenial and Bionic. See #32722.
     - CHUTNEY_TOR_SANDBOX="0"
@@ -57,6 +59,8 @@ matrix:
     ## We check asciidoc with distcheck, to make sure we remove doc products
     - env: DISTCHECK="yes" ASCIIDOC_OPTIONS="" SKIP_MAKE_CHECK="yes"
 
+    ## We check disable module relay
+    - env: MODULES_OPTIONS="--disable-module-relay"
     ## We check disable module dirauth
     - env: MODULES_OPTIONS="--disable-module-dirauth"
 
@@ -70,16 +74,19 @@ matrix:
     - env: NSS_OPTIONS="--enable-nss" C_DIALECT_OPTIONS="-std=gnu99"
 
     ## We include a single coverage build with the best options for coverage
-    - env: COVERAGE_OPTIONS="--enable-coverage" HARDENING_OPTIONS=""
+    - env: COVERAGE_OPTIONS="--enable-coverage" HARDENING_OPTIONS="" TOR_TEST_RNG_SEED="636f766572616765"
 
     ## We clone our stem repo and run `make test-stem`
     - env: TEST_STEM="yes" SKIP_MAKE_CHECK="yes"
+
+    ## We run `make doxygen` without `make check`.
+    - env: SKIP_MAKE_CHECK="yes" DOXYGEN="yes"
 
     ## macOS builds are very slow, and we have a limited number of
     ## concurrent macOS jobs. We're not actively developing Rust, so it is
     ## the lowest priority.
     ## We run rust on macOS, because we have seen macOS rust failures before
-    #- env: RUST_OPTIONS="--enable-rust --enable-cargo-online-mode"
+    #- env: RUST_VERSION="nightly" RUST_OPTIONS="--enable-rust --enable-cargo-online-mode"
     #  compiler: clang
     #  os: osx
 
@@ -96,7 +103,7 @@ matrix:
 
     ## Since this job is disabled, there's not much point having an exception
     ## for it
-    #- env: RUST_OPTIONS="--enable-rust --enable-cargo-online-mode"
+    #- env: RUST_VERSION="nightly" RUST_OPTIONS="--enable-rust --enable-cargo-online-mode"
     #  compiler: clang
     #  os: osx
 
@@ -125,12 +132,16 @@ addons:
       - libscrypt-dev
       - libseccomp-dev
       - libzstd-dev
+      ## Optional build dependencies
+      - coccinelle
+      - shellcheck
       ## Conditional build dependencies
       ## Always installed, so we don't need sudo
       - asciidoc
       - docbook-xsl
       - docbook-xml
       - xmlto
+      - doxygen
       ## Utilities
       ## preventing or diagnosing hangs
       - timelimit
@@ -153,6 +164,8 @@ addons:
       - pkg-config
       ## Optional build dependencies
       - ccache
+      - coccinelle
+      - shellcheck
       ## Conditional build dependencies
       ## Always installed, because manual brew installs are hard to get right
       - asciidoc
@@ -168,6 +181,8 @@ addons:
 osx_image: xcode11.2
 
 before_install:
+  ## Set pipefail: we use pipes
+  - set -o pipefail || echo "pipefail failed"
   ## Create empty rust directories for non-Rust builds, so caching succeeds
   - if [[ "$RUST_OPTIONS" == "" ]]; then mkdir -p $HOME/.cargo $TRAVIS_BUILD_DIR/src/rust/target; fi
 
@@ -183,15 +198,18 @@ install:
   - if [[ "$ASCIIDOC_OPTIONS" == "" ]] && [[ "$TRAVIS_OS_NAME" == "osx" ]]; then export XML_CATALOG_FILES="/usr/local/etc/xml/catalog"; fi
   ## If we're using Rust, download rustup
   - if [[ "$RUST_OPTIONS" != "" ]]; then curl -Ssf -o rustup.sh https://sh.rustup.rs; fi
-  ## Install the nightly channels of rustc and cargo and setup our toolchain environment
-  - if [[ "$RUST_OPTIONS" != "" ]]; then sh rustup.sh -y --default-toolchain nightly; fi
+  ## Install the stable channels of rustc and cargo and setup our toolchain environment
+  - if [[ "$RUST_OPTIONS" != "" ]]; then sh rustup.sh -y --default-toolchain $RUST_VERSION; fi
   - if [[ "$RUST_OPTIONS" != "" ]]; then source $HOME/.cargo/env; fi
   ## If we're testing rust builds in offline-mode, then set up our vendored dependencies
   - if [[ "$TOR_RUST_DEPENDENCIES" == "true" ]]; then export TOR_RUST_DEPENDENCIES=$PWD/src/ext/rust/crates; fi
   ## If we're running chutney, install it.
   - if [[ "$CHUTNEY" != "" ]]; then git clone --depth 1 https://github.com/torproject/chutney.git ; export CHUTNEY_PATH="$(pwd)/chutney"; fi
   ## If we're running stem, install it.
-  - if [[ "$TEST_STEM" != "" ]]; then git clone --depth 1 https://github.com/torproject/stem.git ; export STEM_SOURCE_DIR=`pwd`/stem; fi
+  ## XXXX We are temporarily fixing the version at d1174a83 to work around
+  ## https://github.com/torproject/stem/issues/63 .
+  ## - if [[ "$TEST_STEM" != "" ]]; then git clone --no-tags --depth 1 https://github.com/torproject/stem.git; export STEM_SOURCE_DIR=`pwd`/stem; fi
+  - if [[ "$TEST_STEM" != "" ]]; then git clone https://github.com/torproject/stem.git && ( cd ./stem && git checkout d1174a83c2dcb7b855d8fc986be3ab8f8d88d68c)  ; export STEM_SOURCE_DIR=`pwd`/stem; fi
   ##
   ## Finally, list installed package versions
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then dpkg-query --show; fi
@@ -209,6 +227,13 @@ install:
   - if [[ "$CHUTNEY" != "" ]]; then pushd "$CHUTNEY_PATH"; git log -1 ; popd ; fi
   ## If we're running stem, show the stem version and commit
   - if [[ "$TEST_STEM" != "" ]]; then pushd stem; python -c "from stem import stem; print(stem.__version__);"; git log -1; popd; fi
+  ## Get the coccinelle version
+  ## Installs are unreliable on macOS, so we just rely on brew list --versions
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then spatch --version; fi
+  ## We don't want Tor tests to depend on default configuration file at
+  ## ~/.torrc. So we put some random bytes in there, to make sure we get build
+  ## failures in case Tor is reading it during CI jobs.
+  - dd ibs=1 count=1024 if=/dev/urandom > ~/.torrc
 
 script:
   # Skip test_rebind on macOS
@@ -224,6 +249,7 @@ script:
   ## Diagnostic for bug 29437: kill stem if it hangs for 9.5 minutes
   ## Travis will kill the job after 10 minutes with no output
   - if [[ "$TEST_STEM" != "" ]]; then make src/app/tor; timelimit -p -t 540 -s USR1 -T 30 -S ABRT python3 "$STEM_SOURCE_DIR"/run_tests.py --tor src/app/tor --integ --test control.controller --test control.base_controller --test process --log TRACE --log-file stem.log; fi
+  - if [[ "$DOXYGEN" != "" ]]; then make doxygen; fi
   ## If this build was one that produced coverage, upload it.
   - if [[ "$COVERAGE_OPTIONS" != "" ]]; then coveralls -b . --exclude src/test --exclude src/trunnel --gcov-options '\-p' || echo "Coverage failed"; fi
 

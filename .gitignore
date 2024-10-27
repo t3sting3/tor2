@@ -36,12 +36,6 @@ details-*.json
 uptime-*.json
 *.full_url
 *.last_modified
-# Core files
-core
-core.*
-!core/
-# ccls file that can be per directory.
-*.ccls
 
 # /
 /Makefile
@@ -79,7 +73,6 @@ core.*
 /Tor*Bundle.dmg
 /tor-*-win32.exe
 /warning_flags
-/compile_commands.json
 
 /coverage_html/
 /callgraph/
@@ -165,14 +158,20 @@ core.*
 
 # /src/lib
 /src/lib/libcurve25519_donna.a
+/src/lib/libtor-buf.a
+/src/lib/libtor-buf-testing.a
 /src/lib/libtor-compress.a
 /src/lib/libtor-compress-testing.a
+/src/lib/libtor-confmgt.a
+/src/lib/libtor-confmgt-testing.a
 /src/lib/libtor-container.a
 /src/lib/libtor-container-testing.a
 /src/lib/libtor-crypt-ops.a
 /src/lib/libtor-crypt-ops-testing.a
 /src/lib/libtor-ctime.a
 /src/lib/libtor-ctime-testing.a
+/src/lib/libtor-dispatch.a
+/src/lib/libtor-dispatch-testing.a
 /src/lib/libtor-encoding.a
 /src/lib/libtor-encoding-testing.a
 /src/lib/libtor-evloop.a
@@ -205,6 +204,8 @@ core.*
 /src/lib/libtor-osinfo-testing.a
 /src/lib/libtor-process.a
 /src/lib/libtor-process-testing.a
+/src/lib/libtor-pubsub.a
+/src/lib/libtor-pubsub-testing.a
 /src/lib/libtor-sandbox.a
 /src/lib/libtor-sandbox-testing.a
 /src/lib/libtor-string.a
@@ -220,6 +221,8 @@ core.*
 /src/lib/libtor-tls.a
 /src/lib/libtor-tls-testing.a
 /src/lib/libtor-trace.a
+/src/lib/libtor-version.a
+/src/lib/libtor-version-testing.a
 /src/lib/libtor-wallclock.a
 /src/lib/libtor-wallclock-testing.a
 
@@ -247,20 +250,22 @@ core.*
 /src/test/test
 /src/test/test-slow
 /src/test/test-bt-cl
-/src/test/test-child
+/src/test/test-process
 /src/test/test-memwipe
 /src/test/test-ntor-cl
 /src/test/test-hs-ntor-cl
+/src/test/test-rng
 /src/test/test-switch-id
 /src/test/test-timers
 /src/test/test_workqueue
 /src/test/test.exe
 /src/test/test-slow.exe
 /src/test/test-bt-cl.exe
-/src/test/test-child.exe
+/src/test/test-process.exe
 /src/test/test-ntor-cl.exe
 /src/test/test-hs-ntor-cl.exe
 /src/test/test-memwipe.exe
+/src/test/test-rng.exe
 /src/test/test-switch-id.exe
 /src/test/test-timers.exe
 /src/test/test_workqueue.exe
