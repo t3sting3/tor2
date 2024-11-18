@@ -829,7 +829,7 @@ gen_ed_diff(const smartlist_t *cons1_orig, const smartlist_t *cons2,
 }
 
 /* Helper: Read a base-10 number between 0 and INT32_MAX from <b>s</b> and
- * store it in <b>num_out</b>.  Advance <b>s</b> to the characer immediately
+ * store it in <b>num_out</b>.  Advance <b>s</b> to the character immediately
  * after the number.  Return 0 on success, -1 on failure. */
 static int
 get_linenum(const char **s, int *num_out)
@@ -1128,7 +1128,7 @@ consdiff_get_digests(const smartlist_t *diff,
   {
     const cdline_t *line2 = smartlist_get(diff, 1);
     char *h = tor_memdup_nulterm(line2->s, line2->len);
-    smartlist_split_string(hash_words, h, " ", 0, 0);
+    smartlist_split_string(hash_words, h, " ", 0, 4);
     tor_free(h);
   }
 
@@ -1335,7 +1335,7 @@ consensus_join_lines(const smartlist_t *inp)
 }
 
 /** Given two consensus documents, try to compute a diff between them.  On
- * success, retun a newly allocated string containing that diff.  On failure,
+ * success, return a newly allocated string containing that diff.  On failure,
  * return NULL. */
 char *
 consensus_diff_generate(const char *cons1, size_t cons1len,

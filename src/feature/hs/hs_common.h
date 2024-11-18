@@ -3,7 +3,7 @@
 
 /**
  * \file hs_common.h
- * \brief Header file containing common data for the whole HS subsytem.
+ * \brief Header file containing common data for the whole HS subsystem.
  **/
 
 #ifndef TOR_HS_COMMON_H
@@ -25,7 +25,7 @@ struct ed25519_keypair_t;
 /** Version 3 of the protocol (prop224). */
 #define HS_VERSION_THREE 3
 /** Earliest version we support. */
-#define HS_VERSION_MIN HS_VERSION_TWO
+#define HS_VERSION_MIN HS_VERSION_THREE
 /** Latest version we support. */
 #define HS_VERSION_MAX HS_VERSION_THREE
 
@@ -179,6 +179,10 @@ void hs_build_address(const struct ed25519_public_key_t *key, uint8_t version,
 int hs_address_is_valid(const char *address);
 int hs_parse_address(const char *address, struct ed25519_public_key_t *key_out,
                      uint8_t *checksum_out, uint8_t *version_out);
+int hs_parse_address_no_log(const char *address,
+                            struct ed25519_public_key_t *key_out,
+                            uint8_t *checksum_out, uint8_t *version_out,
+                            const char **errmsg);
 
 void hs_build_blinded_pubkey(const struct ed25519_public_key_t *pubkey,
                              const uint8_t *secret, size_t secret_len,
@@ -210,9 +214,10 @@ const uint8_t *rend_data_get_pk_digest(const rend_data_t *rend_data,
 
 routerstatus_t *pick_hsdir(const char *desc_id, const char *desc_id_base32);
 
+struct hs_subcredential_t;
 void hs_get_subcredential(const struct ed25519_public_key_t *identity_pk,
                           const struct ed25519_public_key_t *blinded_pk,
-                          uint8_t *subcred_out);
+                          struct hs_subcredential_t *subcred_out);
 
 uint64_t hs_get_previous_time_period_num(time_t now);
 uint64_t hs_get_time_period_num(time_t now);

@@ -20,6 +20,10 @@ edge_connection_t *TO_EDGE_CONN(connection_t *);
 entry_connection_t *TO_ENTRY_CONN(connection_t *);
 entry_connection_t *EDGE_TO_ENTRY_CONN(edge_connection_t *);
 
+const edge_connection_t *CONST_TO_EDGE_CONN(const connection_t *);
+const entry_connection_t *CONST_TO_ENTRY_CONN(const connection_t *);
+const entry_connection_t *CONST_EDGE_TO_ENTRY_CONN(const edge_connection_t *);
+
 #define EXIT_CONN_STATE_MIN_ 1
 /** State for an exit connection: waiting for response from DNS farm. */
 #define EXIT_CONN_STATE_RESOLVING 1
@@ -93,6 +97,8 @@ void connection_edge_end_close(edge_connection_t *conn, uint8_t reason);
 int connection_edge_flushed_some(edge_connection_t *conn);
 int connection_edge_finished_flushing(edge_connection_t *conn);
 int connection_edge_finished_connecting(edge_connection_t *conn);
+
+void connection_entry_set_controller_wait(entry_connection_t *conn);
 
 void connection_ap_about_to_close(entry_connection_t *edge_conn);
 void connection_exit_about_to_close(edge_connection_t *edge_conn);
@@ -181,6 +187,27 @@ void connection_edge_free_all(void);
 void connection_ap_warn_and_unmark_if_pending_circ(
                                              entry_connection_t *entry_conn,
                                              const char *where);
+
+/** Lowest value for DNS ttl clipping excluding the random addition. */
+#define MIN_DNS_TTL (5*60)
+/** Highest value for DNS ttl clipping excluding the random addition. */
+#define MAX_DNS_TTL (60*60)
+/** How long do we keep DNS cache entries before purging them (regardless of
+ * their TTL)? */
+#define MAX_DNS_ENTRY_AGE (3*60*60)
+/** How long do we cache/tell clients to cache DNS records when no TTL is
+ * known? */
+#define DEFAULT_DNS_TTL (30*60)
+/** How much should we +- each TTL to make it fuzzy with uniform sampling at
+ * exits?  The value 4 minutes was chosen so that the lowest possible clip is
+ * 60s.  Such low clips were used in the past for all TTLs due to a bug in Tor,
+ * see "The effect of DNS on Tor's Anonymity" by Greschbach et al.  In other
+ * words, sampling such low clips is unlikely to cause any breakage at exits.
+ */
+#define FUZZY_DNS_TTL (4*60)
+
+uint32_t clip_dns_ttl(uint32_t ttl);
+uint32_t clip_dns_fuzzy_ttl(uint32_t ttl);
 
 int connection_half_edge_is_valid_data(const smartlist_t *half_conns,
                                        streamid_t stream_id);

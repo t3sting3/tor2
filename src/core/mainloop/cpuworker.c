@@ -19,7 +19,6 @@
  **/
 #include "core/or/or.h"
 #include "core/or/channel.h"
-#include "core/or/circuitbuild.h"
 #include "core/or/circuitlist.h"
 #include "core/or/connection_or.h"
 #include "app/config/config.h"
@@ -27,6 +26,7 @@
 #include "lib/crypt_ops/crypto_rand.h"
 #include "lib/crypt_ops/crypto_util.h"
 #include "core/or/onion.h"
+#include "feature/relay/circuitbuild_relay.h"
 #include "feature/relay/onion_queue.h"
 #include "feature/stats/rephist.h"
 #include "feature/relay/router.h"
@@ -246,7 +246,7 @@ estimated_usec_for_onionskins(uint32_t n_requests, uint16_t onionskin_type)
   if (onionskin_type > MAX_ONION_HANDSHAKE_TYPE) /* should be impossible */
     return 1000 * (uint64_t)n_requests;
   if (PREDICT_UNLIKELY(onionskins_n_processed[onionskin_type] < 100)) {
-    /* Until we have 100 data points, just asssume everything takes 1 msec. */
+    /* Until we have 100 data points, just assume everything takes 1 msec. */
     return 1000 * (uint64_t)n_requests;
   } else {
     /* This can't overflow: we'll never have more than 500000 onionskins

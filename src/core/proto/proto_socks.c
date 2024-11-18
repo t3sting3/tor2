@@ -67,8 +67,8 @@ log_unsafe_socks_warning(int socks_protocol, const char *address,
              "Tor only an IP address. Applications that do DNS resolves "
              "themselves may leak information. Consider using Socks4A "
              "(e.g. via privoxy or socat) instead. For more information, "
-             "please see https://wiki.torproject.org/TheOnionRouter/"
-             "TorFAQ#SOCKSAndDNS.%s",
+             "please see https://2019.www.torproject.org/docs/faq.html.en"
+             "#WarningsAboutSOCKSandDNSInformationLeaks.%s",
              socks_protocol,
              (int)port,
              safe_socks ? " Rejecting." : "");
@@ -233,7 +233,7 @@ static socks_result_t
 process_socks4_request(const socks_request_t *req, int is_socks4a,
                        int log_sockstype, int safe_socks)
 {
-  if (is_socks4a && !addressmap_have_mapping(req->address, 0)) {
+  if (!is_socks4a && !addressmap_have_mapping(req->address, 0)) {
     log_unsafe_socks_warning(4, req->address, req->port, safe_socks);
 
     if (safe_socks)
@@ -479,7 +479,7 @@ parse_socks5_userpass_auth(const uint8_t *raw_data, socks_request_t *req,
 /**
  * Validate and respond to SOCKS5 username/password request we
  * parsed in parse_socks5_userpass_auth (corresponding to <b>req</b>.
- * Set <b>req->reply</b> to appropriate responsed. Return
+ * Set <b>req->reply</b> to appropriate response. Return
  * SOCKS_RESULT_DONE on success or SOCKS_RESULT_INVALID on failure.
  */
 static socks_result_t
@@ -550,6 +550,7 @@ parse_socks5_client_request(const uint8_t *raw_data, socks_request_t *req,
   if (parsed == -1) {
     log_warn(LD_APP, "socks5: parsing failed - invalid client request");
     res = SOCKS_RESULT_INVALID;
+    socks_request_set_socks5_error(req, SOCKS5_GENERAL_ERROR);
     goto end;
   } else if (parsed == -2) {
     res = SOCKS_RESULT_TRUNCATED;
@@ -561,6 +562,7 @@ parse_socks5_client_request(const uint8_t *raw_data, socks_request_t *req,
 
   if (socks5_client_request_get_version(trunnel_req) != 5) {
     res = SOCKS_RESULT_INVALID;
+    socks_request_set_socks5_error(req, SOCKS5_GENERAL_ERROR);
     goto end;
   }
 
@@ -587,14 +589,14 @@ parse_socks5_client_request(const uint8_t *raw_data, socks_request_t *req,
       strlcpy(req->address, hostname, sizeof(req->address));
     } break;
     case 4: {
-      const char *ipv6 =
-        (const char *)socks5_client_request_getarray_dest_addr_ipv6(
-          trunnel_req);
+      const uint8_t *ipv6 =
+          socks5_client_request_getarray_dest_addr_ipv6(trunnel_req);
       tor_addr_from_ipv6_bytes(&destaddr, ipv6);
 
       tor_addr_to_str(req->address, &destaddr, sizeof(req->address), 1);
     } break;
     default: {
+      socks_request_set_socks5_error(req, SOCKS5_ADDRESS_TYPE_NOT_SUPPORTED);
       res = -1;
     } break;
   }
@@ -775,8 +777,10 @@ handle_socks_message(const uint8_t *raw_data, size_t datalen,
     } else {
       res = parse_socks5_client_request(raw_data, req,
                                         datalen, drain_out);
-      if (res != SOCKS_RESULT_DONE) {
+      if (BUG(res == SOCKS_RESULT_INVALID && req->replylen == 0)) {
         socks_request_set_socks5_error(req, SOCKS5_GENERAL_ERROR);
+      }
+      if (res != SOCKS_RESULT_DONE) {
         goto end;
       }
 

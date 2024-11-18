@@ -20,6 +20,8 @@
 #include "core/or/circuitlist.h"
 #include "core/or/circuituse.h"
 #include "core/or/connection_edge.h"
+#include "core/or/circuitstats.h"
+#include "core/or/extendinfo.h"
 #include "feature/client/addressmap.h"
 #include "feature/client/dnsserv.h"
 #include "feature/client/entrynodes.h"
@@ -54,6 +56,8 @@
 #include "feature/rend/rend_authorized_client_st.h"
 #include "feature/rend/rend_encoded_v2_service_descriptor_st.h"
 #include "feature/rend/rend_service_descriptor_st.h"
+
+#include "src/app/config/statefile.h"
 
 static int control_setconf_helper(control_connection_t *conn,
                                   const control_cmd_args_t *args,
@@ -815,7 +819,10 @@ handle_control_extendcircuit(control_connection_t *conn,
   if (zero_circ) {
     /* start a new circuit */
     circ = origin_circuit_init(intended_purpose, 0);
+    circ->first_hop_from_controller = 1;
   }
+
+  circ->any_hop_from_controller = 1;
 
   /* now circ refers to something that is ready to be extended */
   first_node = zero_circ;
@@ -977,8 +984,7 @@ handle_control_attachstream(control_connection_t *conn,
     edge_conn->end_reason = 0;
     if (tmpcirc)
       circuit_detach_stream(tmpcirc, edge_conn);
-    CONNECTION_AP_EXPECT_NONPENDING(ap_conn);
-    TO_CONN(edge_conn)->state = AP_CONN_STATE_CONTROLLER_WAIT;
+    connection_entry_set_controller_wait(ap_conn);
   }
 
   if (circ && (circ->base_.state != CIRCUIT_STATE_OPEN)) {
@@ -1396,6 +1402,34 @@ handle_control_dropguards(control_connection_t *conn,
   return 0;
 }
 
+static const control_cmd_syntax_t droptimeouts_syntax = {
+  .max_args = 0,
+};
+
+/** Implementation for the DROPTIMEOUTS command. */
+static int
+handle_control_droptimeouts(control_connection_t *conn,
+                          const control_cmd_args_t *args)
+{
+  (void) args; /* We don't take arguments. */
+
+  static int have_warned = 0;
+  if (! have_warned) {
+    log_warn(LD_CONTROL, "DROPTIMEOUTS is dangerous; make sure you understand "
+             "the risks before using it. It may be removed in a future "
+             "version of Tor.");
+    have_warned = 1;
+  }
+
+  circuit_build_times_reset(get_circuit_build_times_mutable());
+  send_control_done(conn);
+  or_state_mark_dirty(get_or_state(), 0);
+  cbt_control_event_buildtimeout_set(get_circuit_build_times(),
+                                     BUILDTIMEOUT_SET_EVENT_RESET);
+
+  return 0;
+}
+
 static const char *hsfetch_keywords[] = {
   "SERVER", NULL,
 };
@@ -1411,10 +1445,8 @@ handle_control_hsfetch(control_connection_t *conn,
                        const control_cmd_args_t *args)
 
 {
-  char digest[DIGEST_LEN], *desc_id = NULL;
+  char *desc_id = NULL;
   smartlist_t *hsdirs = NULL;
-  static const char *v2_str = "v2-";
-  const size_t v2_str_len = strlen(v2_str);
   rend_data_t *rend_query = NULL;
   ed25519_public_key_t v3_pk;
   uint32_t version;
@@ -1422,20 +1454,7 @@ handle_control_hsfetch(control_connection_t *conn,
 
   /* Extract the first argument (either HSAddress or DescID). */
   const char *arg1 = smartlist_get(args->args, 0);
-  /* Test if it's an HS address without the .onion part. */
-  if (rend_valid_v2_service_id(arg1)) {
-    hsaddress = arg1;
-    version = HS_VERSION_TWO;
-  } else if (strcmpstart(arg1, v2_str) == 0 &&
-             rend_valid_descriptor_id(arg1 + v2_str_len) &&
-             base32_decode(digest, sizeof(digest), arg1 + v2_str_len,
-                           REND_DESC_ID_V2_LEN_BASE32) ==
-                REND_DESC_ID_V2_LEN_BASE32) {
-    /* We have a well formed version 2 descriptor ID. Keep the decoded value
-     * of the id. */
-    desc_id = digest;
-    version = HS_VERSION_TWO;
-  } else if (hs_address_is_valid(arg1)) {
+  if (hs_address_is_valid(arg1)) {
     hsaddress = arg1;
     version = HS_VERSION_THREE;
     hs_parse_address(hsaddress, &v3_pk, NULL, NULL);
@@ -1558,6 +1577,11 @@ handle_control_hspost(control_connection_t *conn,
     goto done;
   }
 
+  /* As for HSFETCH, we no longer support v2 on the network and so we stop
+   * right now. Code is not removed in order to minimize the merge forward
+   * conflicts. */
+  goto done;
+
   /* From this point on, it is only v2. */
 
   /*  parse it. */
@@ -1630,11 +1654,13 @@ add_onion_helper_add_service(int hs_version,
   tor_assert(port_cfgs);
   tor_assert(address_out);
 
+  /* Version 2 is disabled. */
+  (void) auth_type;
+  (void) auth_clients;
+
   switch (hs_version) {
   case HS_VERSION_TWO:
-    ret = rend_service_add_ephemeral(pk->v2, port_cfgs, max_streams,
-                                     max_streams_close_circuit, auth_type,
-                                     auth_clients, address_out);
+    ret = RSAE_INTERNAL;
     break;
   case HS_VERSION_THREE:
     ret = hs_service_add_ephemeral(pk->v3, port_cfgs, max_streams,
@@ -2272,7 +2298,7 @@ typedef struct control_cmd_def_t {
  **/
 #define ONE_LINE(name, flags)                                   \
   {                                                             \
-    #name,                                                      \
+    (#name),                                                    \
       handle_control_ ##name,                                   \
       flags,                                                    \
       &name##_syntax,                                           \
@@ -2283,7 +2309,7 @@ typedef struct control_cmd_def_t {
  * flags.
  **/
 #define MULTLINE(name, flags)                                   \
-  { "+"#name,                                                   \
+  { ("+"#name),                                                 \
       handle_control_ ##name,                                   \
       flags,                                                    \
       &name##_syntax                                            \
@@ -2331,6 +2357,7 @@ static const control_cmd_def_t CONTROL_COMMANDS[] =
   ONE_LINE(protocolinfo, 0),
   ONE_LINE(authchallenge, CMD_FL_WIPE),
   ONE_LINE(dropguards, 0),
+  ONE_LINE(droptimeouts, 0),
   ONE_LINE(hsfetch, 0),
   MULTLINE(hspost, 0),
   ONE_LINE(add_onion, CMD_FL_WIPE),

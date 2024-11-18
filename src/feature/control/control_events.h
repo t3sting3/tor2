@@ -12,6 +12,7 @@
 #ifndef TOR_CONTROL_EVENTS_H
 #define TOR_CONTROL_EVENTS_H
 
+#include "lib/cc/ctassert.h"
 #include "core/or/ocirc_event.h"
 #include "core/or/orconn_event.h"
 
@@ -35,7 +36,8 @@ typedef enum stream_status_event_t {
   STREAM_EVENT_NEW          = 5,
   STREAM_EVENT_NEW_RESOLVE  = 6,
   STREAM_EVENT_FAILED_RETRIABLE = 7,
-  STREAM_EVENT_REMAP        = 8
+  STREAM_EVENT_REMAP        = 8,
+  STREAM_EVENT_CONTROLLER_WAIT = 9
 } stream_status_event_t;
 
 /** Used to indicate the type of a buildtime event */
@@ -164,6 +166,7 @@ int control_event_buildtimeout_set(buildtimeout_set_event_t type,
 int control_event_signal(uintptr_t signal);
 
 void control_event_bootstrap(bootstrap_status_t status, int progress);
+int control_get_bootstrap_percent(void);
 MOCK_DECL(void, control_event_bootstrap_prob_or,(const char *warn,
                                                  int reason,
                                                  or_connection_t *or_conn));
@@ -221,6 +224,10 @@ void control_event_hs_descriptor_content(const char *onion_address,
                                          const char *desc_id,
                                          const char *hsdir_fp,
                                          const char *content);
+void cbt_control_event_buildtimeout_set(const circuit_build_times_t *cbt,
+                                        buildtimeout_set_event_t type);
+
+int control_event_enter_controller_wait(void);
 
 void control_events_free_all(void);
 
@@ -287,10 +294,7 @@ typedef uint64_t event_mask_t;
 
 /* If EVENT_MAX_ ever hits 0x0040, we need to make the mask into a
  * different structure, as it can only handle a maximum left shift of 1<<63. */
-
-#if EVENT_MAX_ >= EVENT_CAPACITY_
-#error control_connection_t.event_mask has an event greater than its capacity
-#endif
+CTASSERT(EVENT_MAX_ < EVENT_CAPACITY_);
 
 #define EVENT_MASK_(e)               (((uint64_t)1)<<(e))
 
@@ -336,6 +340,8 @@ struct control_event_t {
 };
 
 extern const struct control_event_t control_event_table[];
+
+void control_logmsg_strip_newlines(char *msg);
 
 #ifdef TOR_UNIT_TESTS
 MOCK_DECL(STATIC void,

@@ -54,6 +54,7 @@
 #include "feature/nodelist/describe.h"
 #include "feature/nodelist/nodelist.h"
 #include "feature/nodelist/routerlist.h"
+#include "feature/relay/circuitbuild_relay.h"
 #include "feature/relay/routermode.h"
 #include "feature/stats/rephist.h"
 #include "lib/crypt_ops/crypto_util.h"
@@ -251,7 +252,7 @@ command_process_create_cell(cell_t *cell, channel_t *chan)
     log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
            "Received a create cell (type %d) from %s with zero circID; "
            " ignoring.", (int)cell->command,
-           channel_get_actual_remote_descr(chan));
+           channel_describe_peer(chan));
     return;
   }
 
@@ -294,7 +295,7 @@ command_process_create_cell(cell_t *cell, channel_t *chan)
            "Received create cell (type %d) from %s, but we're connected "
            "to it as a client. "
            "Sending back a destroy.",
-           (int)cell->command, channel_get_canonical_remote_descr(chan));
+           (int)cell->command, channel_describe_peer(chan));
     channel_send_destroy(cell->circ_id, chan,
                          END_CIRC_REASON_TORPROTOCOL);
     return;
@@ -474,7 +475,7 @@ command_process_relay_cell(cell_t *cell, channel_t *chan)
     log_debug(LD_OR,
               "unknown circuit %u on connection from %s. Dropping.",
               (unsigned)cell->circ_id,
-              channel_get_canonical_remote_descr(chan));
+              channel_describe_peer(chan));
     return;
   }
 
@@ -535,7 +536,7 @@ command_process_relay_cell(cell_t *cell, channel_t *chan)
         control_event_circ_bandwidth_used_for_circ(TO_ORIGIN_CIRCUIT(circ));
       } else if (circ->n_chan) {
         log_warn(LD_OR, " upstream=%s",
-                 channel_get_actual_remote_descr(circ->n_chan));
+                 channel_describe_peer(circ->n_chan));
       }
       circuit_mark_for_close(circ, END_CIRC_REASON_TORPROTOCOL);
       return;
@@ -546,7 +547,7 @@ command_process_relay_cell(cell_t *cell, channel_t *chan)
                "Received too many RELAY_EARLY cells on circ %u from %s."
                "  Closing circuit.",
                (unsigned)cell->circ_id,
-               safe_str(channel_get_canonical_remote_descr(chan)));
+               safe_str(channel_describe_peer(chan)));
         circuit_mark_for_close(circ, END_CIRC_REASON_TORPROTOCOL);
         return;
       }
@@ -617,7 +618,7 @@ command_process_destroy_cell(cell_t *cell, channel_t *chan)
   if (!circ) {
     log_info(LD_OR,"unknown circuit %u on connection from %s. Dropping.",
              (unsigned)cell->circ_id,
-             channel_get_canonical_remote_descr(chan));
+             channel_describe_peer(chan));
     return;
   }
   log_debug(LD_OR,"Received for circID %u.",(unsigned)cell->circ_id);
@@ -628,19 +629,22 @@ command_process_destroy_cell(cell_t *cell, channel_t *chan)
   if (!CIRCUIT_IS_ORIGIN(circ) &&
       chan == TO_OR_CIRCUIT(circ)->p_chan &&
       cell->circ_id == TO_OR_CIRCUIT(circ)->p_circ_id) {
-    /* the destroy came from behind */
+    /* The destroy came from behind so nullify its p_chan. Close the circuit
+     * with a DESTROYED reason so we don't propagate along the path forward the
+     * reason which could be used as a side channel. */
     circuit_set_p_circid_chan(TO_OR_CIRCUIT(circ), 0, NULL);
-    circuit_mark_for_close(circ, reason|END_CIRC_REASON_FLAG_REMOTE);
+    circuit_mark_for_close(circ, END_CIRC_REASON_DESTROYED);
   } else { /* the destroy came from ahead */
     circuit_set_n_circid_chan(circ, 0, NULL);
     if (CIRCUIT_IS_ORIGIN(circ)) {
       circuit_mark_for_close(circ, reason|END_CIRC_REASON_FLAG_REMOTE);
     } else {
-      char payload[1];
-      log_debug(LD_OR, "Delivering 'truncated' back.");
-      payload[0] = (char)reason;
-      relay_send_command_from_edge(0, circ, RELAY_COMMAND_TRUNCATED,
-                                   payload, sizeof(payload), NULL);
+      /* Close the circuit so we stop queuing cells for it and propagate the
+       * DESTROY cell down the circuit so relays can stop queuing in-flight
+       * cells for this circuit which helps with memory pressure. We do NOT
+       * propagate the remote reason so not to create a side channel. */
+      log_debug(LD_OR, "Received DESTROY cell from n_chan, closing circuit.");
+      circuit_mark_for_close(circ, END_CIRC_REASON_DESTROYED);
     }
   }
 }

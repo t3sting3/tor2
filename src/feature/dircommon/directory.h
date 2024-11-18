@@ -13,6 +13,7 @@
 #define TOR_DIRECTORY_H
 
 dir_connection_t *TO_DIR_CONN(connection_t *c);
+const dir_connection_t *CONST_TO_DIR_CONN(const connection_t *c);
 
 #define DIR_CONN_STATE_MIN_ 1
 /** State for connection to directory server: waiting for connect(). */
@@ -85,6 +86,12 @@ dir_connection_t *TO_DIR_CONN(connection_t *c);
    (p)==DIR_PURPOSE_UPLOAD_SIGNATURES ||        \
    (p)==DIR_PURPOSE_UPLOAD_RENDDESC_V2 ||       \
    (p)==DIR_PURPOSE_UPLOAD_HSDESC)
+
+/** True iff p is a purpose corresponding to onion service that is either
+ * uploading or fetching actions. */
+#define DIR_PURPOSE_IS_HS(p)          \
+  ((p) == DIR_PURPOSE_FETCH_HSDESC || \
+   (p) == DIR_PURPOSE_UPLOAD_HSDESC)
 
 enum compress_method_t;
 int parse_http_response(const char *headers, int *code, time_t *date,

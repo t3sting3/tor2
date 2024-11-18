@@ -16,16 +16,19 @@
 #include "app/config/config.h"
 #include "core/or/circuitbuild.h"
 #include "core/or/policies.h"
+#include "core/or/extendinfo.h"
 #include "feature/dirauth/shared_random_state.h"
 #include "feature/hs/hs_cache.h"
 #include "feature/hs/hs_circuitmap.h"
 #include "feature/hs/hs_client.h"
 #include "feature/hs/hs_common.h"
 #include "feature/hs/hs_dos.h"
+#include "feature/hs/hs_ob.h"
 #include "feature/hs/hs_ident.h"
 #include "feature/hs/hs_service.h"
 #include "feature/hs_common/shared_random_client.h"
 #include "feature/nodelist/describe.h"
+#include "feature/nodelist/microdesc.h"
 #include "feature/nodelist/networkstatus.h"
 #include "feature/nodelist/nodelist.h"
 #include "feature/nodelist/routerset.h"
@@ -275,7 +278,9 @@ hs_get_time_period_num(time_t now)
   if (now != 0) {
     current_time = now;
   } else {
-    networkstatus_t *ns = networkstatus_get_live_consensus(approx_time());
+    networkstatus_t *ns =
+      networkstatus_get_reasonably_live_consensus(approx_time(),
+                                                  usable_consensus_flavor());
     current_time = ns ? ns->valid_after : approx_time();
   }
 
@@ -808,12 +813,12 @@ hs_parse_address_impl(const char *address, ed25519_public_key_t *key_out,
 }
 
 /** Using the given identity public key and a blinded public key, compute the
- * subcredential and put it in subcred_out (must be of size DIGEST256_LEN).
+ * subcredential and put it in subcred_out.
  * This can't fail. */
 void
 hs_get_subcredential(const ed25519_public_key_t *identity_pk,
                      const ed25519_public_key_t *blinded_pk,
-                     uint8_t *subcred_out)
+                     hs_subcredential_t *subcred_out)
 {
   uint8_t credential[DIGEST256_LEN];
   crypto_digest_t *digest;
@@ -841,7 +846,8 @@ hs_get_subcredential(const ed25519_public_key_t *identity_pk,
                           sizeof(credential));
   crypto_digest_add_bytes(digest, (const char *) blinded_pk->pubkey,
                           ED25519_PUBKEY_LEN);
-  crypto_digest_get_digest(digest, (char *) subcred_out, DIGEST256_LEN);
+  crypto_digest_get_digest(digest, (char *) subcred_out->subcred,
+                           SUBCRED_LEN);
   crypto_digest_free(digest);
 
   memwipe(credential, 0, sizeof(credential));
@@ -884,12 +890,14 @@ hs_set_conn_addr_port(const smartlist_t *ports, edge_connection_t *conn)
   chosen_port = smartlist_choose(matching_ports);
   smartlist_free(matching_ports);
   if (chosen_port) {
-    if (!(chosen_port->is_unix_addr)) {
-      /* save the original destination before we overwrite it */
-      if (conn->hs_ident) {
-        conn->hs_ident->orig_virtual_port = TO_CONN(conn)->port;
-      }
+    /* Remember, v2 doesn't use an hs_ident. */
+    if (conn->hs_ident) {
+      /* There is always a connection identifier at this point. Regardless of a
+       * Unix or TCP port, note the virtual port. */
+      conn->hs_ident->orig_virtual_port = chosen_port->virtual_port;
+    }
 
+    if (!(chosen_port->is_unix_addr)) {
       /* Get a non-AF_UNIX connection ready for connection_exit_connect() */
       tor_addr_copy(&TO_CONN(conn)->addr, &chosen_port->real_addr);
       TO_CONN(conn)->port = chosen_port->real_port;
@@ -909,30 +917,35 @@ hs_set_conn_addr_port(const smartlist_t *ports, edge_connection_t *conn)
  * case the caller would want only one field. checksum_out MUST at least be 2
  * bytes long.
  *
- * Return 0 if parsing went well; return -1 in case of error. */
+ * Return 0 if parsing went well; return -1 in case of error and if errmsg is
+ * non NULL, a human readable string message is set. */
 int
-hs_parse_address(const char *address, ed25519_public_key_t *key_out,
-                 uint8_t *checksum_out, uint8_t *version_out)
+hs_parse_address_no_log(const char *address, ed25519_public_key_t *key_out,
+                        uint8_t *checksum_out, uint8_t *version_out,
+                        const char **errmsg)
 {
   char decoded[HS_SERVICE_ADDR_LEN];
 
   tor_assert(address);
 
+  if (errmsg) {
+    *errmsg = NULL;
+  }
+
   /* Obvious length check. */
   if (strlen(address) != HS_SERVICE_ADDR_LEN_BASE32) {
-    log_warn(LD_REND, "Service address %s has an invalid length. "
-                      "Expected %lu but got %lu.",
-             escaped_safe_str(address),
-             (unsigned long) HS_SERVICE_ADDR_LEN_BASE32,
-             (unsigned long) strlen(address));
+    if (errmsg) {
+      *errmsg = "Invalid length";
+    }
     goto invalid;
   }
 
   /* Decode address so we can extract needed fields. */
   if (base32_decode(decoded, sizeof(decoded), address, strlen(address))
       != sizeof(decoded)) {
-    log_warn(LD_REND, "Service address %s can't be decoded.",
-             escaped_safe_str(address));
+    if (errmsg) {
+      *errmsg = "Unable to base32 decode";
+    }
     goto invalid;
   }
 
@@ -942,6 +955,22 @@ hs_parse_address(const char *address, ed25519_public_key_t *key_out,
   return 0;
  invalid:
   return -1;
+}
+
+/** Same has hs_parse_address_no_log() but emits a log warning on parsing
+ * failure. */
+int
+hs_parse_address(const char *address, ed25519_public_key_t *key_out,
+                 uint8_t *checksum_out, uint8_t *version_out)
+{
+  const char *errmsg = NULL;
+  int ret = hs_parse_address_no_log(address, key_out, checksum_out,
+                                    version_out, &errmsg);
+  if (ret < 0) {
+    log_warn(LD_REND, "Service address %s failed to be parsed: %s",
+             escaped_safe_str(address), errmsg);
+  }
+  return ret;
 }
 
 /** Validate a given onion address. The length, the base32 decoding, and
@@ -1084,7 +1113,8 @@ hs_in_period_between_tp_and_srv,(const networkstatus_t *consensus, time_t now))
   time_t srv_start_time, tp_start_time;
 
   if (!consensus) {
-    consensus = networkstatus_get_live_consensus(now);
+    consensus = networkstatus_get_reasonably_live_consensus(now,
+                                                  usable_consensus_flavor());
     if (!consensus) {
       return 0;
     }
@@ -1329,7 +1359,9 @@ hs_get_responsible_hsdirs(const ed25519_public_key_t *blinded_pk,
   sorted_nodes = smartlist_new();
 
   /* Make sure we actually have a live consensus */
-  networkstatus_t *c = networkstatus_get_live_consensus(approx_time());
+  networkstatus_t *c =
+    networkstatus_get_reasonably_live_consensus(approx_time(),
+                                                usable_consensus_flavor());
   if (!c || smartlist_len(c->routerstatus_list) == 0) {
       log_warn(LD_REND, "No live consensus so we can't get the responsible "
                "hidden service directories.");
@@ -1720,7 +1752,7 @@ hs_get_extend_info_from_lspecs(const smartlist_t *lspecs,
     switch (link_specifier_get_ls_type(ls)) {
     case LS_IPV4:
       /* Skip if we already seen a v4. If direct_conn is true, we skip this
-       * block because fascist_firewall_choose_address_ls() will set ap. If
+       * block because reachable_addr_choose_from_ls() will set ap. If
        * direct_conn is false, set ap to the first IPv4 address and port in
        * the link specifiers.*/
       if (have_v4 || direct_conn) continue;
@@ -1752,7 +1784,7 @@ hs_get_extend_info_from_lspecs(const smartlist_t *lspecs,
 
   /* Choose a preferred address first, but fall back to an allowed address. */
   if (direct_conn)
-    fascist_firewall_choose_address_ls(lspecs, 0, &ap);
+    reachable_addr_choose_from_ls(lspecs, 0, &ap);
 
   /* Legacy ID is mandatory, and we require an IP address. */
   if (!tor_addr_port_is_valid_ap(&ap, 0)) {
@@ -1788,7 +1820,7 @@ hs_get_extend_info_from_lspecs(const smartlist_t *lspecs,
 
 /***********************************************************************/
 
-/** Initialize the entire HS subsytem. This is called in tor_init() before any
+/** Initialize the entire HS subsystem. This is called in tor_init() before any
  * torrc options are loaded. Only for >= v3. */
 void
 hs_init(void)
@@ -1807,6 +1839,7 @@ hs_free_all(void)
   hs_service_free_all();
   hs_cache_free_all();
   hs_client_free_all();
+  hs_ob_free_all();
 }
 
 /** For the given origin circuit circ, decrement the number of rendezvous

@@ -285,6 +285,11 @@ handle_establish_intro_cell_dos_extension(
     }
   }
 
+  /* At this point, the extension is valid so any values out of it implies
+   * that it was set explicitly and thus flag the circuit that it should not
+   * look at the consensus for that reason for the defenses' values. */
+  circ->introduce2_dos_defense_explicit = 1;
+
   /* A value of 0 is valid in the sense that we accept it but we still disable
    * the defenses so return false. */
   if (intro2_rate_per_sec == 0 || intro2_burst_per_sec == 0) {
@@ -509,7 +514,8 @@ hs_intro_received_establish_intro(or_circuit_t *circ, const uint8_t *request,
   switch (first_byte) {
     case TRUNNEL_HS_INTRO_AUTH_KEY_TYPE_LEGACY0:
     case TRUNNEL_HS_INTRO_AUTH_KEY_TYPE_LEGACY1:
-      return rend_mid_establish_intro_legacy(circ, request, request_len);
+      /* Don't accept version 2 introduction anymore. */
+      goto err;
     case TRUNNEL_HS_INTRO_AUTH_KEY_TYPE_ED25519:
       return handle_establish_intro(circ, request, request_len);
     default:
